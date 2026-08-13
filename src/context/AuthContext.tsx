@@ -68,17 +68,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setCurrentUser(user);
-      if (user) {
-        await fetchOrCreateProfile(user);
-      } else {
-        setUserProfile(null);
-      }
+    // Safety fallback timeout: ensure loading state never freezes app if Firebase Auth hangs
+    const fallbackTimer = setTimeout(() => {
       setLoading(false);
-    });
+    }, 3000);
 
-    return () => unsubscribe();
+    let unsubscribe = () => {};
+    try {
+      unsubscribe = onAuthStateChanged(
+        auth,
+        async (user) => {
+          clearTimeout(fallbackTimer);
+          setCurrentUser(user);
+          if (user) {
+            await fetchOrCreateProfile(user);
+          } else {
+            setUserProfile(null);
+          }
+          setLoading(false);
+        },
+        (error) => {
+          console.error('Auth state error:', error);
+          clearTimeout(fallbackTimer);
+          setLoading(false);
+        }
+      );
+    } catch (err) {
+      console.error('Firebase Auth init error:', err);
+      clearTimeout(fallbackTimer);
+      setLoading(false);
+    }
+
+    return () => {
+      clearTimeout(fallbackTimer);
+      unsubscribe();
+    };
   }, []);
 
   const loginWithGoogle = async () => {
