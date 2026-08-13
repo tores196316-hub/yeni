@@ -11,9 +11,22 @@ import { initializeApp as initAdminApp, getApps, cert } from 'firebase-admin/app
 import { getFirestore } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import { createServer as createViteServer } from 'vite';
+import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 
 dotenv.config();
+
+// Initialize Gemini Client
+const ai = process.env.GEMINI_API_KEY
+  ? new GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    })
+  : null;
 
 // Load Firebase Config safely with defaults
 const defaultFirebaseConfig = {
@@ -678,6 +691,71 @@ app.post('/api/images/:id/download', async (req, res) => {
   }
 });
 
+// POST /api/ai/chat - Soru Sor AI Asistanı
+app.post('/api/ai/chat', async (req, res) => {
+  try {
+    const { messages, message } = req.body;
+
+    if (!ai) {
+      return res.json({
+        reply: "Soru Sor AI Asistanı şu anda aktif modda çalışıyor. PicHost resim yükleme platformumuz hakkında sorularınızı sorabilirsiniz!",
+      });
+    }
+
+    const userPrompt = message || (Array.isArray(messages) && messages[messages.length - 1]?.content);
+    if (!userPrompt) {
+      return res.status(400).json({ message: 'Lütfen bir soru veya mesaj yazın.' });
+    }
+
+    // Map history if provided
+    let contents: any = userPrompt;
+    if (Array.isArray(messages) && messages.length > 0) {
+      contents = messages.map((m: { role: string; content: string }) => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: m.content }],
+      }));
+    }
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.6-flash',
+      contents: contents,
+      config: {
+        systemInstruction: `Sen PicHost (pichost.com) platformunun resmi, arkadaş canlısı ve uzman "Soru Sor AI Asistanı"sın.
+Görevin PicHost kullanıcılarına platform kullanımı, resim yükleme, üyelik, güvenlik ve özellikler hakkında yardımcı olmaktır.
+
+PicHost Hakkında Detaylı Bilgiler:
+- Platform Tanımı: Türkiye'nin en hızlı, güvenli ve ücretsiz resim yükleme, depolama ve paylaşım servisi.
+- Dosya Yükleme Sınırları: Resim başına 50 MB'a kadar destekler. Desteklenen formatlar: JPG, JPEG, PNG, GIF, WEBP, SVG, HEIC.
+- Yükleme Yöntemleri: Sürükle-bırak, dosya seçici, direkt resim yapıştırma (Ctrl+V veya Pano) ve URL üzerinden yükleme.
+- Bağlantı ve Gömmeler: Yükleme sonrası Doğrudan Bağlantı (Direct Link), Forumlar için Markdown kodu, Web siteleri için HTML gömme kodu ve İndirme QR Kodu anında üretilir.
+- Gizlilik ve Otomatik Silinme:
+  * Herkese Açık (Galeri sayfasında görünür)
+  * Gizli / Liste Dışı (Arama ve galeride çıkmaz, sadece link verilen kişiler görür)
+  * Otomatik Silinme Süreleri: Kalıcı (Süresiz), 1 Saat, 1 Gün, 1 Hafta, 1 Ay sonra otomatik silinme.
+- Üyelik Avantajları: Tamamen ücretsiz üye olarak yüklediğiniz tüm görselleri profil sayfanızda düzenleyebilir, silinebilir linkler atayabilir, görüntülenme istatistiklerini takip edebilirsiniz.
+- PRO / Premium Özellikleri: 8-Core CPU ve 8GB RAM sunucu altyapımız ile ışık hızında yükleme/indirme, sınırsız depolama alanı, sıfır reklam, toplu resim yükleme imkanı.
+- Resim Detay Sayfası Araçları: Resim kırpma ve döndürme, QR Kod paylaşımı, İndirme butonu, DMCA ve Telif Hakkı bildirimi (Şikayet Et tuşu).
+- Güvenlik ve Gizlilik: Tüm yüklemeler SSL şifrelemeyle korunur. Yasadışı veya uygunsuz içerikler kesinlikle yasaktır ve anında kaldırılır.
+
+Yanıt Kuralları:
+- Her zaman samimi, profesyonel ve yardımcı bir dille Türkçe yanıt ver.
+- Okunabilirliği artırmak için kısa paragraflar, maddeler (bullet points) ve uygun emojiler kullan.
+- Kullanıcı resim nasıl yüklenir, üyelik gerekli mi, resimlerim silinir mi gibi sorular sorduğunda doğrudan net yanıt ver.
+- PicHost dışındaki genel konularda da kısa ve nazik yardımcı yanıt verdikten sonra ana görevinin PicHost asistanlığı olduğunu belirt.`,
+        temperature: 0.7,
+      },
+    });
+
+    const reply = response.text || 'Üzgünüm, şu an bir yanıt oluşturamadım. Lütfen tekrar deneyin.';
+    return res.json({ reply });
+  } catch (err: any) {
+    console.error('AI Assistant Error:', err);
+    return res.json({
+      reply: 'Anlık bir bağlantı yoğunluğu oluştu. Lütfen sorunuzu tekrar sorun veya /sss sayfamızı inceleyin.'
+    });
+  }
+});
+
 // DELETE /api/images/:id
 app.delete('/api/images/:id', async (req, res) => {
   try {
@@ -874,7 +952,7 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    const distPath = path.resolve(process.cwd(), 'dist');
     app.use(express.static(distPath, {
       maxAge: '1y',
       etag: true,
@@ -887,7 +965,12 @@ async function startServer() {
       },
     }));
     app.get('*', (_req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      const indexPath = path.join(distPath, 'index.html');
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        res.status(404).send('Build index.html bulunamadı. Lütfen "npm run build" komutunun çalıştığından emin olun.');
+      }
     });
   }
 

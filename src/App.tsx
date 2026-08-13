@@ -5,6 +5,7 @@ import { AuthProvider } from './context/AuthContext';
 import { Navbar } from './components/Navbar';
 import { Footer } from './components/Footer';
 import { AnnouncementBanner } from './components/AnnouncementBanner';
+import { SoruSorAiAsistan } from './components/SoruSorAiAsistan';
 
 // Pages
 import { Home } from './pages/Home';
@@ -69,6 +70,7 @@ export default function App() {
               </Routes>
             </main>
             <Footer />
+            <SoruSorAiAsistan />
           </div>
         </ToastProvider>
       </AuthProvider>
