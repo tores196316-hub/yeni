@@ -9,6 +9,11 @@ import {
   Trash2,
   ExternalLink,
   Settings,
+  BarChart3,
+  HardDrive,
+  Lock,
+  Sparkles,
+  PieChart,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { fetchUserImages, deleteImage } from '../services/api';
@@ -23,7 +28,7 @@ export const Profile: React.FC = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    document.title = 'Profilim — PicHost.io';
+    document.title = 'Profilim ve İstatistikler — PicHost.io';
     if (currentUser) {
       loadProfileImages();
     }
@@ -72,6 +77,19 @@ export const Profile: React.FC = () => {
 
   const totalViews = images.reduce((acc, curr) => acc + (curr.views || 0), 0);
   const totalDownloads = images.reduce((acc, curr) => acc + (curr.downloads || 0), 0);
+  const totalBytes = images.reduce((acc, curr) => acc + (curr.bytes || 0), 0);
+  const totalMB = (totalBytes / (1024 * 1024)).toFixed(2);
+
+  // Format distribution
+  const formatCounts: Record<string, number> = {};
+  images.forEach((img) => {
+    const fmt = (img.format || 'jpg').toUpperCase();
+    formatCounts[fmt] = (formatCounts[fmt] || 0) + 1;
+  });
+
+  // Top performing images
+  const topImages = [...images].sort((a, b) => (b.views || 0) - (a.views || 0)).slice(0, 5);
+  const maxViews = topImages[0]?.views || 1;
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
@@ -114,9 +132,9 @@ export const Profile: React.FC = () => {
         </Link>
       </div>
 
-      {/* Profile Stats Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-        <div className="p-6 rounded-2xl bg-slate-900/80 border border-slate-800 flex items-center gap-4">
+      {/* Profile Metrics Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 flex items-center gap-4 shadow-lg">
           <div className="w-12 h-12 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
             <ImageIcon className="w-6 h-6" />
           </div>
@@ -126,7 +144,7 @@ export const Profile: React.FC = () => {
           </div>
         </div>
 
-        <div className="p-6 rounded-2xl bg-slate-900/80 border border-slate-800 flex items-center gap-4">
+        <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 flex items-center gap-4 shadow-lg">
           <div className="w-12 h-12 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
             <Eye className="w-6 h-6" />
           </div>
@@ -136,7 +154,7 @@ export const Profile: React.FC = () => {
           </div>
         </div>
 
-        <div className="p-6 rounded-2xl bg-slate-900/80 border border-slate-800 flex items-center gap-4">
+        <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 flex items-center gap-4 shadow-lg">
           <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
             <Download className="w-6 h-6" />
           </div>
@@ -145,7 +163,88 @@ export const Profile: React.FC = () => {
             <p className="text-xs text-slate-400">Toplam İndirilme</p>
           </div>
         </div>
+
+        <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 flex items-center gap-4 shadow-lg">
+          <div className="w-12 h-12 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400">
+            <HardDrive className="w-6 h-6" />
+          </div>
+          <div>
+            <p className="text-2xl font-black text-white">{totalMB} MB</p>
+            <p className="text-xs text-slate-400">Toplam Depolama Alanı</p>
+          </div>
+        </div>
       </div>
+
+      {/* Analytics Dashboard Visualizer */}
+      {images.length > 0 && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Top Images Bar Chart */}
+          <div className="lg:col-span-2 bg-slate-900/80 border border-slate-800 rounded-3xl p-6 space-y-5 shadow-xl">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <BarChart3 className="w-5 h-5 text-sky-400" />
+                <h3 className="text-base font-bold text-white">En Çok Görüntülenen Resimler</h3>
+              </div>
+              <span className="text-xs text-slate-400">İlk 5 Görsel</span>
+            </div>
+
+            <div className="space-y-4 pt-2">
+              {topImages.map((img) => {
+                const percent = Math.max(5, Math.round(((img.views || 0) / maxViews) * 100));
+                return (
+                  <div key={img.id} className="space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-semibold text-slate-200 truncate max-w-[200px]">
+                        {img.title || 'İsimsiz'}
+                      </span>
+                      <span className="font-mono text-sky-400 font-bold">
+                        {img.views || 0} Görüntülenme
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-950 h-3 rounded-full overflow-hidden border border-slate-800">
+                      <div
+                        className="bg-gradient-to-r from-sky-500 to-indigo-500 h-full rounded-full transition-all duration-500"
+                        style={{ width: `${percent}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Format Distribution Card */}
+          <div className="bg-slate-900/80 border border-slate-800 rounded-3xl p-6 space-y-5 shadow-xl flex flex-col justify-between">
+            <div className="flex items-center gap-2">
+              <PieChart className="w-5 h-5 text-indigo-400" />
+              <h3 className="text-base font-bold text-white">Dosya Biçimleri DAĞILIMI</h3>
+            </div>
+
+            <div className="space-y-3">
+              {Object.entries(formatCounts).map(([fmt, count]) => {
+                const percentage = Math.round((count / images.length) * 100);
+                return (
+                  <div key={fmt} className="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-800">
+                    <div className="flex items-center gap-2.5">
+                      <span className="w-3 h-3 rounded-full bg-sky-400"></span>
+                      <span className="text-xs font-bold text-white">{fmt}</span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-xs font-mono font-bold text-slate-200">{count} adet</span>
+                      <span className="text-[10px] text-slate-400 ml-1.5">(%{percentage})</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 text-[11px] text-slate-400 flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>Resimlerinizi WEBP formatına dönüştürerek %80 depolama tasarrufu sağlayabilirsiniz.</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* User Uploads Grid */}
       <div className="space-y-6">
@@ -170,6 +269,14 @@ export const Profile: React.FC = () => {
                     alt={img.title || 'Resim'}
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                   />
+
+                  {img.passwordProtected && (
+                    <div className="absolute top-2 left-2 bg-amber-500/90 text-white text-[10px] font-bold px-2 py-0.5 rounded-full backdrop-blur-md flex items-center gap-1 shadow-md">
+                      <Lock className="w-3 h-3" />
+                      <span>Şifreli</span>
+                    </div>
+                  )}
+
                   <div className="absolute inset-0 bg-slate-950/60 opacity-0 group-hover:opacity-100 transition-opacity p-3 flex items-center justify-center gap-2">
                     <Link
                       to={`/i/${img.id}`}

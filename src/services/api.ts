@@ -6,13 +6,17 @@ export const uploadImageXHR = (
   file: File,
   title?: string,
   token?: string,
-  onProgress?: (percent: number) => void
+  onProgress?: (percent: number) => void,
+  options?: { passwordProtected?: boolean; password?: string; isPublic?: boolean }
 ): Promise<ImageItem> => {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const formData = new FormData();
     formData.append('image', file);
     if (title) formData.append('title', title);
+    if (options?.passwordProtected) formData.append('passwordProtected', 'true');
+    if (options?.password) formData.append('password', options.password);
+    if (options?.isPublic !== undefined) formData.append('isPublic', String(options.isPublic));
 
     xhr.open('POST', `${API_BASE}/upload`);
 
@@ -99,6 +103,19 @@ export const reportImage = async (id: string, reason: string): Promise<void> => 
 
 export const incrementDownload = async (id: string): Promise<void> => {
   await fetch(`${API_BASE}/images/${id}/download`, { method: 'POST' });
+};
+
+export const verifyImagePassword = async (id: string, password: string): Promise<boolean> => {
+  const res = await fetch(`${API_BASE}/images/${id}/verify-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  });
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    throw new Error(json.message || 'Şifre doğrulama başarısız.');
+  }
+  return true;
 };
 
 export const fetchUserImages = async (token: string): Promise<ImageItem[]> => {

@@ -14,6 +14,9 @@ export interface ImageItem {
   views: number;
   downloads: number;
   isPublic: boolean;
+  passwordProtected?: boolean;
+  passwordHash?: string;
+  viewsHistory?: { date: string; count: number }[];
   isReported?: boolean;
   reportReason?: string;
   createdAt: string;

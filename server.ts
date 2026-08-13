@@ -600,6 +600,10 @@ app.post('/api/upload', uploadLimiter, upload.single('image'), async (req, res) 
     }
 
     const user = (req as any).user;
+    const isPublic = req.body.isPublic === 'false' || req.body.isPublic === false ? false : true;
+    const passwordProtected = req.body.passwordProtected === 'true' || req.body.passwordProtected === true || Boolean(req.body.password);
+    const password = req.body.password ? String(req.body.password).trim() : '';
+
     const imageDoc = {
       id: imageId,
       title: originalName.replace(/\.[^/.]+$/, ''),
@@ -615,7 +619,10 @@ app.post('/api/upload', uploadLimiter, upload.single('image'), async (req, res) 
       userEmail: user ? user.email : '',
       views: 0,
       downloads: 0,
-      isPublic: true,
+      isPublic: isPublic,
+      passwordProtected: passwordProtected,
+      passwordHash: password, // Simple string match
+      viewsHistory: [{ date: now.toISOString().split('T')[0], count: 0 }],
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
     };
@@ -629,33 +636,23 @@ app.post('/api/upload', uploadLimiter, upload.single('image'), async (req, res) 
   }
 });
 
-// GET /api/images
+// GET /api/images - Enforces privacy: returns only user's own images
 app.get('/api/images', async (req, res) => {
   try {
-    const { sort = 'newest', search = '', limit = '32' } = req.query;
-    const cacheKey = `images_${sort}_${search}_${limit}`;
-    const cached = getCachedData(cacheKey);
-    
-    // Set 10-second browser/CDN SWR caching
-    res.setHeader('Cache-Control', 'public, max-age=10, stale-while-revalidate=30');
-
-    if (cached) {
-      res.setHeader('X-Cache', 'HIT');
-      return res.json(cached);
+    const user = (req as any).user;
+    if (!user) {
+      return res.json({ images: [], total: 0 });
     }
 
+    const { sort = 'newest', search = '', limit = '32' } = req.query;
     const { items, total } = await dbGetImages({
       sort: String(sort),
       search: String(search),
       limit: Number(limit) || 32,
-      isPublicOnly: true,
+      userId: user.uid,
     });
 
-    const responsePayload = { images: items, total };
-    setCachedData(cacheKey, responsePayload);
-    res.setHeader('X-Cache', 'MISS');
-
-    return res.json(responsePayload);
+    return res.json({ images: items, total });
   } catch (err: any) {
     console.error('Fetch images error:', err);
     return res.status(500).json({ message: 'Resimler yüklenirken hata oluştu.' });
@@ -688,6 +685,31 @@ app.post('/api/images/:id/download', async (req, res) => {
     return res.json({ status: 'ok' });
   } catch {
     return res.status(500).json({ message: 'Hata.' });
+  }
+});
+
+// POST /api/images/:id/verify-password
+app.post('/api/images/:id/verify-password', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { password } = req.body;
+    const data = await dbGetImageById(id);
+
+    if (!data) {
+      return res.status(404).json({ message: 'Resim bulunamadı.' });
+    }
+
+    if (!data.passwordProtected) {
+      return res.json({ success: true, message: 'Şifresiz resim.' });
+    }
+
+    if (data.passwordHash && data.passwordHash === String(password || '').trim()) {
+      return res.json({ success: true, message: 'Şifre doğru.' });
+    }
+
+    return res.status(401).json({ success: false, message: 'Hatalı şifre! Lütfen tekrar deneyin.' });
+  } catch {
+    return res.status(500).json({ message: 'Şifre doğrulama hatası.' });
   }
 });
 

@@ -12,9 +12,12 @@ import {
   QrCode,
   User,
   Info,
+  Lock,
+  KeyRound,
+  CheckCircle2,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
-import { fetchImageById, incrementDownload, deleteImage } from '../services/api';
+import { fetchImageById, incrementDownload, deleteImage, verifyImagePassword } from '../services/api';
 import { ImageItem } from '../types';
 import { CopyInput } from '../components/CopyInput';
 import { ReportModal } from '../components/ReportModal';
@@ -32,12 +35,21 @@ export const ImageDetail: React.FC = () => {
   const [reportModalOpen, setReportModalOpen] = useState(false);
   const [qrModalOpen, setQrModalOpen] = useState(false);
 
+  // Password Protection State
+  const [isUnlocked, setIsUnlocked] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [verifyingPassword, setVerifyingPassword] = useState(false);
+  const [passwordError, setPasswordError] = useState('');
+
   useEffect(() => {
     if (id) {
       fetchImageById(id)
         .then((data) => {
           setImage(data);
           document.title = `${data.title || 'Resim Detayı'} — PicHost.io`;
+          if (!data.passwordProtected) {
+            setIsUnlocked(true);
+          }
         })
         .catch((err) => {
           showToast(err.message || 'Resim bulunamadı.', 'error');
@@ -46,6 +58,25 @@ export const ImageDetail: React.FC = () => {
         .finally(() => setLoading(false));
     }
   }, [id]);
+
+  const handleVerifyPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!id || !passwordInput.trim()) return;
+
+    setVerifyingPassword(true);
+    setPasswordError('');
+
+    try {
+      await verifyImagePassword(id, passwordInput.trim());
+      setIsUnlocked(true);
+      showToast('Şifre doğrulandı! Görsel açılıyor.', 'success');
+    } catch (err: any) {
+      setPasswordError(err.message || 'Hatalı şifre. Lütfen tekrar deneyin.');
+      showToast('Hatalı şifre!', 'error');
+    } finally {
+      setVerifyingPassword(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -152,19 +183,65 @@ export const ImageDetail: React.FC = () => {
       </div>
 
       {/* Main Preview */}
-      <div className="bg-slate-950 border border-slate-800/90 rounded-3xl overflow-hidden p-4 md:p-8 flex items-center justify-center shadow-2xl relative">
-        <a href={image.url} target="_blank" rel="noreferrer" className="group relative block max-w-full">
-          <img
-            src={image.url}
-            alt={image.title || 'Resim'}
-            className="max-h-[70vh] w-auto object-contain rounded-xl shadow-lg"
-          />
-          <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 transition-opacity rounded-xl flex items-center justify-center text-white font-semibold gap-2">
-            <Maximize2 className="w-6 h-6" />
-            <span>Tam Boyut Aç</span>
+      {image.passwordProtected && !isUnlocked ? (
+        <div className="bg-slate-900 border border-amber-500/30 rounded-3xl p-8 md:p-12 text-center space-y-6 max-w-lg mx-auto shadow-2xl">
+          <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto shadow-inner">
+            <Lock className="w-8 h-8" />
           </div>
-        </a>
-      </div>
+
+          <div className="space-y-2">
+            <h2 className="text-xl font-bold text-white">Bu Görsel Şifre İle Korunuyor</h2>
+            <p className="text-xs text-slate-400">
+              Görseli ve paylaşım bağlantılarını görüntülemek için lütfen doğru erişim şifresini girin.
+            </p>
+          </div>
+
+          <form onSubmit={handleVerifyPassword} className="space-y-4">
+            <div className="space-y-1 text-left">
+              <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                <KeyRound className="w-3.5 h-3.5 text-amber-400" />
+                <span>Erişim Şifresi</span>
+              </label>
+              <input
+                type="password"
+                value={passwordInput}
+                onChange={(e) => setPasswordInput(e.target.value)}
+                placeholder="Şifrenizi yazın..."
+                className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 text-sm text-white px-4 py-3 rounded-xl outline-none"
+              />
+            </div>
+
+            {passwordError && (
+              <p className="text-xs text-rose-400 bg-rose-950/40 border border-rose-800/50 p-2.5 rounded-xl text-center font-medium">
+                {passwordError}
+              </p>
+            )}
+
+            <button
+              type="submit"
+              disabled={verifyingPassword || !passwordInput.trim()}
+              className="w-full py-3 bg-amber-600 hover:bg-amber-500 text-white font-bold text-sm rounded-xl shadow-lg shadow-amber-600/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
+            >
+              <Lock className="w-4 h-4" />
+              <span>{verifyingPassword ? 'Kilit Açılıyor...' : 'Görseli Aç'}</span>
+            </button>
+          </form>
+        </div>
+      ) : (
+        <div className="bg-slate-950 border border-slate-800/90 rounded-3xl overflow-hidden p-4 md:p-8 flex items-center justify-center shadow-2xl relative">
+          <a href={image.url} target="_blank" rel="noreferrer" className="group relative block max-w-full">
+            <img
+              src={image.url}
+              alt={image.title || 'Resim'}
+              className="max-h-[70vh] w-auto object-contain rounded-xl shadow-lg"
+            />
+            <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 transition-opacity rounded-xl flex items-center justify-center text-white font-semibold gap-2">
+              <Maximize2 className="w-6 h-6" />
+              <span>Tam Boyut Aç</span>
+            </div>
+          </a>
+        </div>
+      )}
 
       {/* Metadata Metrics & Share Links Grid */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
