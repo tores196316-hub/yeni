@@ -17,7 +17,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
-import { fetchImageById, incrementDownload, deleteImage, verifyImagePassword } from '../services/api';
+import { fetchImageById, incrementDownload, deleteImage, verifyImagePassword, formatDirectUrl } from '../services/api';
 import { ImageItem } from '../types';
 import { CopyInput } from '../components/CopyInput';
 import { ReportModal } from '../components/ReportModal';
@@ -89,6 +89,7 @@ export const ImageDetail: React.FC = () => {
 
   if (!image) return null;
 
+  const directUrl = formatDirectUrl(image.url);
   const isOwner = currentUser && image.userId === currentUser.uid;
   const canDelete = isOwner || isAdmin;
   const pageUrl = window.location.href;
@@ -99,7 +100,7 @@ export const ImageDetail: React.FC = () => {
       setImage((prev) => (prev ? { ...prev, downloads: (prev.downloads || 0) + 1 } : null));
 
       // Fetch blob and force download
-      const response = await fetch(image.url);
+      const response = await fetch(directUrl);
       const blob = await response.blob();
       const blobUrl = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -113,7 +114,7 @@ export const ImageDetail: React.FC = () => {
       showToast('İndirme başlatıldı.', 'success');
     } catch {
       showToast('İndirme sırasında hata oluştu. Doğrudan bağlantı açılıyor...', 'info');
-      window.open(image.url, '_blank');
+      window.open(directUrl, '_blank');
     }
   };
 
@@ -229,9 +230,9 @@ export const ImageDetail: React.FC = () => {
         </div>
       ) : (
         <div className="bg-slate-950 border border-slate-800/90 rounded-3xl overflow-hidden p-4 md:p-8 flex items-center justify-center shadow-2xl relative">
-          <a href={image.url} target="_blank" rel="noreferrer" className="group relative block max-w-full">
+          <a href={directUrl} target="_blank" rel="noreferrer" className="group relative block max-w-full">
             <img
-              src={image.url}
+              src={directUrl}
               alt={image.title || 'Resim'}
               className="max-h-[70vh] w-auto object-contain rounded-xl shadow-lg"
             />
@@ -296,19 +297,19 @@ export const ImageDetail: React.FC = () => {
           </h3>
 
           <div className="space-y-4">
-            <CopyInput label="Doğrudan Resim Linki (Direct URL)" value={image.url} />
+            <CopyInput label="Doğrudan Resim Linki (Direct URL)" value={directUrl} />
             <CopyInput label="Resim Detay Sayfası URL" value={pageUrl} />
             <CopyInput
               label="Markdown Kodu"
-              value={`![${image.title || 'Resim'}](${image.url})`}
+              value={`![${image.title || 'Resim'}](${directUrl})`}
             />
             <CopyInput
               label="BBCode (Forumlar İçin)"
-              value={`[img]${image.url}[/img]`}
+              value={`[img]${directUrl}[/img]`}
             />
             <CopyInput
               label="HTML Gömme Kodu"
-              value={`<img src="${image.url}" alt="${image.title || 'Resim'}" />`}
+              value={`<img src="${directUrl}" alt="${image.title || 'Resim'}" />`}
             />
           </div>
         </div>

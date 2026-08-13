@@ -2,6 +2,21 @@ import { ImageItem, AdminStats, UserProfile, Announcement } from '../types';
 
 const API_BASE = '/api';
 
+export const formatDirectUrl = (url?: string): string => {
+  if (!url) return '';
+  if (url.startsWith('https://res.cloudinary.com') || url.startsWith('http://res.cloudinary.com')) {
+    return url;
+  }
+  if (url.includes('/uploads/')) {
+    const fileName = url.substring(url.indexOf('/uploads/'));
+    return `${window.location.origin}${fileName}`;
+  }
+  if (url.startsWith('/')) {
+    return `${window.location.origin}${url}`;
+  }
+  return url;
+};
+
 export const uploadImageXHR = (
   file: File,
   title?: string,

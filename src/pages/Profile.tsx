@@ -16,7 +16,7 @@ import {
   PieChart,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { fetchUserImages, deleteImage } from '../services/api';
+import { fetchUserImages, deleteImage, formatDirectUrl } from '../services/api';
 import { ImageItem } from '../types';
 import { useToast } from '../context/ToastContext';
 import { EmptyState } from '../components/EmptyState';
@@ -265,7 +265,7 @@ export const Profile: React.FC = () => {
               >
                 <div className="relative aspect-video w-full bg-slate-950 overflow-hidden">
                   <img
-                    src={img.thumbnail_url || img.url}
+                    src={formatDirectUrl(img.thumbnail_url || img.url)}
                     alt={img.title || 'Resim'}
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                   />

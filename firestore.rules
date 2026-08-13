@@ -1,48 +1,13 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    function isAuthenticated() {
-      return request.auth != null;
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
     }
-    
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
-    }
-
-    function isAdmin() {
-      return isAuthenticated() && 
-        (request.auth.token.admin == true || 
-         request.auth.token.email == "admin@pichost.com" ||
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin");
-    }
-
-    // Images Collection
     match /images/{imageId} {
       allow read: if true;
-      allow create: if true;
-      allow delete: if isOwner(resource.data.userId) || isAdmin();
-      allow update: if true;
-    }
-
-    // Users Collection
-    match /users/{userId} {
-      allow read: if true;
-      allow create, update: if isOwner(userId) || isAdmin();
-      allow delete: if isAdmin();
-    }
-
-    // Announcements Collection
-    match /announcements/{announcementId} {
-      allow read: if true;
-      allow write: if isAdmin();
-    }
-
-    // Reports Collection
-    match /reports/{reportId} {
-      allow read: if isAdmin();
-      allow create: if true;
-      allow update, delete: if isAdmin();
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
     }
   }
 }

@@ -13,7 +13,7 @@ import {
   Lock,
   EyeOff,
 } from 'lucide-react';
-import { uploadImageXHR } from '../services/api';
+import { uploadImageXHR, formatDirectUrl } from '../services/api';
 import { ImageItem, UploadProgress } from '../types';
 import { CopyInput } from '../components/CopyInput';
 import { useAuth } from '../context/AuthContext';
@@ -547,53 +547,57 @@ export const UploadPage: React.FC = () => {
                 )}
 
                 {/* Completed Image Links & Preview */}
-                {item.status === 'completed' && item.result && (
-                  <div className="pt-2 space-y-4 border-t border-slate-800/80">
-                    <div className="flex flex-col md:flex-row gap-4 items-center">
-                      <img
-                        src={item.result.thumbnail_url || item.result.url}
-                        alt="Önizleme"
-                        className="w-28 h-28 object-cover rounded-xl border border-slate-700 bg-slate-950 shrink-0"
-                      />
-                      <div className="flex-1 space-y-2 w-full">
-                        <a
-                          href={`/i/${item.result.id}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1.5 text-xs font-bold text-sky-400 hover:text-sky-300"
-                        >
-                          <span>Resim Sayfasını Aç</span>
-                          <ExternalLink className="w-3.5 h-3.5" />
-                        </a>
-                        <div className="grid grid-cols-1 gap-2">
-                          <CopyInput
-                            label="Doğrudan Resim Linki (Direct URL)"
-                            value={item.result.url}
-                          />
-                          <CopyInput
-                            label="Resim Sayfası URL"
-                            value={`${window.location.origin}/i/${item.result.id}`}
-                          />
+                {item.status === 'completed' && item.result && (() => {
+                  const directUrl = formatDirectUrl(item.result.url);
+                  const thumbUrl = formatDirectUrl(item.result.thumbnail_url || item.result.url);
+                  return (
+                    <div className="pt-2 space-y-4 border-t border-slate-800/80">
+                      <div className="flex flex-col md:flex-row gap-4 items-center">
+                        <img
+                          src={thumbUrl}
+                          alt="Önizleme"
+                          className="w-28 h-28 object-cover rounded-xl border border-slate-700 bg-slate-950 shrink-0"
+                        />
+                        <div className="flex-1 space-y-2 w-full">
+                          <a
+                            href={directUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1.5 text-xs font-bold text-sky-400 hover:text-sky-300"
+                          >
+                            <span>Resmi Yeni Sekmede Aç</span>
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </a>
+                          <div className="grid grid-cols-1 gap-2">
+                            <CopyInput
+                              label="Doğrudan Resim Linki (Direct URL)"
+                              value={directUrl}
+                            />
+                            <CopyInput
+                              label="Resim Sayfası URL"
+                              value={`${window.location.origin}/i/${item.result.id}`}
+                            />
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
-                      <CopyInput
-                        label="Markdown Kodu"
-                        value={`![${item.result.title || 'Resim'}](${item.result.url})`}
-                      />
-                      <CopyInput
-                        label="BBCode (Forum)"
-                        value={`[img]${item.result.url}[/img]`}
-                      />
-                      <CopyInput
-                        label="HTML Kodu"
-                        value={`<img src="${item.result.url}" alt="${item.result.title || 'Resim'}" />`}
-                      />
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
+                        <CopyInput
+                          label="Markdown Kodu"
+                          value={`![${item.result.title || 'Resim'}](${directUrl})`}
+                        />
+                        <CopyInput
+                          label="BBCode (Forum)"
+                          value={`[img]${directUrl}[/img]`}
+                        />
+                        <CopyInput
+                          label="HTML Kodu"
+                          value={`<img src="${directUrl}" alt="${item.result.title || 'Resim'}" />`}
+                        />
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
               </div>
             ))}
           </div>

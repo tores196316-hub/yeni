@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Search, Flame, Clock, Download, Eye } from 'lucide-react';
-import { fetchImages } from '../services/api';
+import { fetchImages, formatDirectUrl } from '../services/api';
 import { ImageItem } from '../types';
 import { GallerySkeletonGrid } from '../components/LoadingSkeleton';
 import { EmptyState } from '../components/EmptyState';
@@ -110,7 +110,7 @@ export const Gallery: React.FC = () => {
             >
               <div className="relative aspect-video w-full overflow-hidden bg-slate-950">
                 <img
-                  src={img.thumbnail_url || img.url}
+                  src={formatDirectUrl(img.thumbnail_url || img.url)}
                   alt={img.title || 'Resim'}
                   loading="lazy"
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"

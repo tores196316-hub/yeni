@@ -583,10 +583,19 @@ app.post('/api/upload', uploadLimiter, upload.single('image'), async (req, res) 
       const filePath = path.join(uploadsDir, fileName);
       fs.writeFileSync(filePath, fileBuffer);
 
-      const host = req.get('x-forwarded-host') || req.get('host') || 'localhost:3000';
+      const rawHost = req.get('x-forwarded-host') || req.get('host') || '';
+      let hostName = rawHost.split(',')[0].trim();
+      if (hostName.includes(':')) {
+        hostName = hostName.split(':')[0];
+      }
+
       const isHttps = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' || req.headers['x-forwarded-ssl'] === 'on' || process.env.NODE_ENV === 'production';
       const protocol = isHttps ? 'https' : 'http';
-      const fileUrl = `${protocol}://${host}/uploads/${fileName}`;
+
+      let fileUrl = `/uploads/${fileName}`;
+      if (hostName && !['localhost', '127.0.0.1', '0.0.0.0'].includes(hostName)) {
+        fileUrl = `${protocol}://${hostName}/uploads/${fileName}`;
+      }
 
       uploadResult = {
         public_id: `local_${imageId}`,
