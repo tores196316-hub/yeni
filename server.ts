@@ -11,9 +11,30 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
-import firebaseConfig from './firebase-applet-config.json' assert { type: 'json' };
 
 dotenv.config();
+
+// Load Firebase Config safely with defaults
+const defaultFirebaseConfig = {
+  projectId: process.env.FIREBASE_PROJECT_ID || "gen-lang-client-0179187692",
+  appId: process.env.FIREBASE_APP_ID || "1:636682579535:web:c3f35ca579c6c898b0c43a",
+  apiKey: process.env.FIREBASE_API_KEY || "AIzaSyCsny4h0xNd0osEbJRTL1vpfszQCleFH1s",
+  authDomain: process.env.FIREBASE_AUTH_DOMAIN || "gen-lang-client-0179187692.firebaseapp.com",
+  firestoreDatabaseId: process.env.FIREBASE_DATABASE_ID || "ai-studio-cloudsnappro-db3e9328-0ce0-429f-b04b-59ca421a7874",
+  storageBucket: process.env.FIREBASE_STORAGE_BUCKET || "gen-lang-client-0179187692.firebasestorage.app",
+  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || "636682579535"
+};
+
+let firebaseConfig = defaultFirebaseConfig;
+try {
+  const jsonPath = path.join(process.cwd(), 'firebase-applet-config.json');
+  if (fs.existsSync(jsonPath)) {
+    const raw = fs.readFileSync(jsonPath, 'utf-8');
+    firebaseConfig = { ...defaultFirebaseConfig, ...JSON.parse(raw) };
+  }
+} catch (err) {
+  console.log('Using default embedded Firebase config');
+}
 
 // Initialize Express App
 const app = express();
