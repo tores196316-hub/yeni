@@ -1,0 +1,6 @@
+{
+  "name": "PicHost - Resim Yükleme Platformu",
+  "description": "Hızlı, güvenli ve profesyonel resim yükleme, depolama ve paylaşım platformu.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
