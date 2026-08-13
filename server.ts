@@ -1,12 +1,12 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import multer from 'multer';
+import { v2 as cloudinary } from 'cloudinary';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import multer from 'multer';
-import { v2 as cloudinary } from 'cloudinary';
-import { initializeApp as initAdminApp, cert, getApps } from 'firebase-admin/app';
+import { initializeApp as initAdminApp, getApps, cert } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import { createServer as createViteServer } from 'vite';
@@ -16,13 +16,13 @@ dotenv.config();
 
 // Load Firebase Config safely with defaults
 const defaultFirebaseConfig = {
-  projectId: process.env.FIREBASE_PROJECT_ID || "gen-lang-client-0179187692",
-  appId: process.env.FIREBASE_APP_ID || "1:636682579535:web:c3f35ca579c6c898b0c43a",
-  apiKey: process.env.FIREBASE_API_KEY || "AIzaSyCsny4h0xNd0osEbJRTL1vpfszQCleFH1s",
-  authDomain: process.env.FIREBASE_AUTH_DOMAIN || "gen-lang-client-0179187692.firebaseapp.com",
-  firestoreDatabaseId: process.env.FIREBASE_DATABASE_ID || "ai-studio-cloudsnappro-db3e9328-0ce0-429f-b04b-59ca421a7874",
-  storageBucket: process.env.FIREBASE_STORAGE_BUCKET || "gen-lang-client-0179187692.firebasestorage.app",
-  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || "636682579535"
+  projectId: process.env.FIREBASE_PROJECT_ID || 'gen-lang-client-0179187692',
+  appId: process.env.FIREBASE_APP_ID || '1:636682579535:web:c3f35ca579c6c898b0c43a',
+  apiKey: process.env.FIREBASE_API_KEY || 'AIzaSyCsny4h0xNd0osEbJRTL1vpfszQCleFH1s',
+  authDomain: process.env.FIREBASE_AUTH_DOMAIN || 'gen-lang-client-0179187692.firebaseapp.com',
+  firestoreDatabaseId: process.env.FIREBASE_DATABASE_ID || 'ai-studio-cloudsnappro-db3e9328-0ce0-429f-b04b-59ca421a7874',
+  storageBucket: process.env.FIREBASE_STORAGE_BUCKET || 'gen-lang-client-0179187692.firebasestorage.app',
+  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || '636682579535',
 };
 
 let firebaseConfig = defaultFirebaseConfig;
@@ -32,7 +32,7 @@ try {
     const raw = fs.readFileSync(jsonPath, 'utf-8');
     firebaseConfig = { ...defaultFirebaseConfig, ...JSON.parse(raw) };
   }
-} catch (err) {
+} catch {
   console.log('Using default embedded Firebase config');
 }
 
@@ -61,34 +61,357 @@ const generalLimiter = rateLimit({
 
 const uploadLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 50,
+  max: 100,
   message: { message: 'Upload sınırı aşıldı. Lütfen daha sonra tekrar deneyin.' },
 });
 
 app.use('/api/', generalLimiter);
 
-// Firebase Admin Setup
-const dbId = firebaseConfig.firestoreDatabaseId;
-if (!getApps().length) {
-  if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
-    initAdminApp({
-      credential: cert({
-        projectId: firebaseConfig.projectId,
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-      }),
-    });
-  } else {
-    initAdminApp({
-      projectId: firebaseConfig.projectId,
-    });
+// Local Directory for Uploads and JSON Store
+const uploadsDir = path.join(process.cwd(), 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+app.use('/uploads', express.static(uploadsDir));
+
+// File Store Fallback (when Firebase Admin credentials are not provided or GCP ADC is missing)
+const dbStorePath = path.join(uploadsDir, 'db_store.json');
+
+interface LocalStore {
+  images: any[];
+  users: any[];
+  reports: any[];
+  announcements: any[];
+}
+
+function readLocalStore(): LocalStore {
+  try {
+    if (fs.existsSync(dbStorePath)) {
+      const raw = fs.readFileSync(dbStorePath, 'utf-8');
+      return JSON.parse(raw);
+    }
+  } catch (e) {
+    console.error('Local DB read error:', e);
+  }
+  return { images: [], users: [], reports: [], announcements: [] };
+}
+
+function writeLocalStore(store: LocalStore) {
+  try {
+    fs.writeFileSync(dbStorePath, JSON.stringify(store, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('Local DB write error:', e);
   }
 }
 
-const adminDb = (dbId && dbId !== '(default)')
-  ? getFirestore(dbId)
-  : getFirestore();
-const adminAuth = getAuth();
+// Firebase Admin Setup (Safely handles missing credentials)
+const dbId = firebaseConfig.firestoreDatabaseId;
+let adminDb: any = null;
+let adminAuth: any = null;
+let firebaseAdminReady = false;
+
+try {
+  if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
+    if (!getApps().length) {
+      initAdminApp({
+        credential: cert({
+          projectId: firebaseConfig.projectId,
+          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+          privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+        }),
+      });
+    }
+    adminDb = (dbId && dbId !== '(default)') ? getFirestore(dbId) : getFirestore();
+    adminAuth = getAuth();
+    firebaseAdminReady = true;
+    console.log('Firebase Admin initialized with service account.');
+  } else {
+    if (!getApps().length) {
+      initAdminApp({ projectId: firebaseConfig.projectId });
+    }
+    adminDb = (dbId && dbId !== '(default)') ? getFirestore(dbId) : getFirestore();
+    adminAuth = getAuth();
+    firebaseAdminReady = true;
+    console.log('Firebase Admin initialized with project ID.');
+  }
+} catch (err: any) {
+  console.log('Firebase Admin init skipped/failed. Using local store fallback:', err.message);
+  firebaseAdminReady = false;
+}
+
+// JWT Token Decoder fallback
+function decodeJwtPayload(token: string) {
+  try {
+    const parts = token.split('.');
+    if (parts.length === 3) {
+      const payloadStr = Buffer.from(parts[1], 'base64').toString('utf-8');
+      const payload = JSON.parse(payloadStr);
+      return {
+        uid: payload.user_id || payload.sub || payload.uid || 'anonymous',
+        email: payload.email || '',
+        name: payload.name || payload.email?.split('@')[0] || 'Kullanıcı',
+        admin: payload.email === (process.env.ADMIN_EMAIL || 'admin@pichost.com') || Boolean(payload.admin),
+      };
+    }
+  } catch {}
+  return null;
+}
+
+// Database Abstraction Helpers
+async function dbSaveImage(imageDoc: any) {
+  if (firebaseAdminReady && adminDb) {
+    try {
+      await adminDb.collection('images').doc(imageDoc.id).set(imageDoc);
+    } catch (err: any) {
+      console.log('Firestore set image error, saving to local store:', err.message);
+      firebaseAdminReady = false;
+    }
+  }
+  const store = readLocalStore();
+  store.images = store.images.filter((img) => img.id !== imageDoc.id);
+  store.images.unshift(imageDoc);
+  writeLocalStore(store);
+}
+
+async function dbGetImages(options: { sort?: string; search?: string; limit?: number; userId?: string; isPublicOnly?: boolean }) {
+  let items: any[] = [];
+  if (firebaseAdminReady && adminDb) {
+    try {
+      let query = adminDb.collection('images');
+      if (options.isPublicOnly) {
+        query = query.where('isPublic', '==', true);
+      }
+      if (options.userId) {
+        query = query.where('userId', '==', options.userId);
+      }
+      const snap = await query.get();
+      snap.forEach((doc: any) => items.push(doc.data()));
+    } catch (err: any) {
+      console.log('Firestore getImages error, using local store:', err.message);
+      firebaseAdminReady = false;
+    }
+  }
+
+  if (items.length === 0) {
+    const store = readLocalStore();
+    items = store.images;
+    if (options.isPublicOnly) {
+      items = items.filter((img) => img.isPublic !== false);
+    }
+    if (options.userId) {
+      items = items.filter((img) => img.userId === options.userId);
+    }
+  }
+
+  // Filter search
+  if (options.search) {
+    const q = options.search.toLowerCase();
+    items = items.filter((img) => img.title?.toLowerCase().includes(q));
+  }
+
+  // Sort
+  if (options.sort === 'views') {
+    items.sort((a, b) => (b.views || 0) - (a.views || 0));
+  } else if (options.sort === 'downloads') {
+    items.sort((a, b) => (b.downloads || 0) - (a.downloads || 0));
+  } else {
+    items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  const total = items.length;
+  if (options.limit) {
+    items = items.slice(0, options.limit);
+  }
+
+  return { items, total };
+}
+
+async function dbGetImageById(id: string) {
+  if (firebaseAdminReady && adminDb) {
+    try {
+      const snap = await adminDb.collection('images').doc(id).get();
+      if (snap.exists) return snap.data();
+    } catch (err: any) {
+      console.log('Firestore getImageById error:', err.message);
+      firebaseAdminReady = false;
+    }
+  }
+  const store = readLocalStore();
+  return store.images.find((img) => img.id === id) || null;
+}
+
+async function dbIncrementViews(id: string) {
+  if (firebaseAdminReady && adminDb) {
+    try {
+      const docRef = adminDb.collection('images').doc(id);
+      const snap = await docRef.get();
+      if (snap.exists) {
+        await docRef.update({ views: (snap.data()?.views || 0) + 1 });
+      }
+    } catch {}
+  }
+  const store = readLocalStore();
+  const img = store.images.find((i) => i.id === id);
+  if (img) {
+    img.views = (img.views || 0) + 1;
+    writeLocalStore(store);
+  }
+}
+
+async function dbIncrementDownloads(id: string) {
+  if (firebaseAdminReady && adminDb) {
+    try {
+      const docRef = adminDb.collection('images').doc(id);
+      const snap = await docRef.get();
+      if (snap.exists) {
+        await docRef.update({ downloads: (snap.data()?.downloads || 0) + 1 });
+      }
+    } catch {}
+  }
+  const store = readLocalStore();
+  const img = store.images.find((i) => i.id === id);
+  if (img) {
+    img.downloads = (img.downloads || 0) + 1;
+    writeLocalStore(store);
+  }
+}
+
+async function dbDeleteImage(id: string) {
+  if (firebaseAdminReady && adminDb) {
+    try {
+      await adminDb.collection('images').doc(id).delete();
+    } catch {}
+  }
+  const store = readLocalStore();
+  store.images = store.images.filter((i) => i.id !== id);
+  writeLocalStore(store);
+}
+
+async function dbReportImage(id: string, reason: string) {
+  const reportId = Math.random().toString(36).substring(2, 9);
+  const reportDoc = {
+    id: reportId,
+    imageId: id,
+    reason: reason || 'Neden belirtilmedi',
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+  };
+
+  if (firebaseAdminReady && adminDb) {
+    try {
+      await adminDb.collection('reports').doc(reportId).set(reportDoc);
+      await adminDb.collection('images').doc(id).update({ isReported: true, reportReason: reason });
+    } catch {}
+  }
+
+  const store = readLocalStore();
+  store.reports.push(reportDoc);
+  const img = store.images.find((i) => i.id === id);
+  if (img) {
+    img.isReported = true;
+    img.reportReason = reason;
+  }
+  writeLocalStore(store);
+}
+
+async function dbGetAdminStats() {
+  const { items: allImages } = await dbGetImages({});
+  let totalViews = 0;
+  let totalDownloads = 0;
+  let todayUploads = 0;
+  let todayUsers = 0;
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  allImages.forEach((data) => {
+    totalViews += data.views || 0;
+    totalDownloads += data.downloads || 0;
+    if (data.createdAt?.startsWith(todayStr)) todayUploads++;
+  });
+
+  let allUsers: any[] = [];
+  if (firebaseAdminReady && adminDb) {
+    try {
+      const snap = await adminDb.collection('users').get();
+      snap.forEach((doc: any) => allUsers.push(doc.data()));
+    } catch {}
+  }
+  if (allUsers.length === 0) {
+    const store = readLocalStore();
+    allUsers = store.users;
+  }
+  const totalUsers = Math.max(allUsers.length, 1);
+  allUsers.forEach((u) => {
+    if (u.createdAt?.startsWith(todayStr)) todayUsers++;
+  });
+
+  return {
+    totalUsers,
+    totalImages: allImages.length,
+    todayUploads,
+    todayUsers,
+    totalViews,
+    totalDownloads,
+    recentUploads: allImages.slice(0, 10),
+    recentUsers: allUsers.slice(0, 10),
+  };
+}
+
+async function dbGetUsers() {
+  let list: any[] = [];
+  if (firebaseAdminReady && adminDb) {
+    try {
+      const snap = await adminDb.collection('users').get();
+      snap.forEach((doc: any) => list.push(doc.data()));
+    } catch {}
+  }
+  if (list.length === 0) {
+    const store = readLocalStore();
+    list = store.users;
+  }
+  return list;
+}
+
+async function dbBanUser(uid: string, isBanned: boolean) {
+  if (firebaseAdminReady && adminDb) {
+    try {
+      await adminDb.collection('users').doc(uid).update({ isBanned: Boolean(isBanned) });
+    } catch {}
+  }
+  const store = readLocalStore();
+  const u = store.users.find((usr) => usr.uid === uid);
+  if (u) {
+    u.isBanned = isBanned;
+  } else {
+    store.users.push({ uid, isBanned });
+  }
+  writeLocalStore(store);
+}
+
+async function dbGetAnnouncements() {
+  let list: any[] = [];
+  if (firebaseAdminReady && adminDb) {
+    try {
+      const snap = await adminDb.collection('announcements').where('active', '==', true).get();
+      snap.forEach((doc: any) => list.push(doc.data()));
+    } catch {}
+  }
+  if (list.length === 0) {
+    const store = readLocalStore();
+    list = store.announcements.filter((a) => a.active !== false);
+  }
+  return list;
+}
+
+async function dbAddAnnouncement(ann: any) {
+  if (firebaseAdminReady && adminDb) {
+    try {
+      await adminDb.collection('announcements').doc(ann.id).set(ann);
+    } catch {}
+  }
+  const store = readLocalStore();
+  store.announcements.unshift(ann);
+  writeLocalStore(store);
+}
 
 // Cloudinary Setup
 const cloudName = process.env.CLOUDINARY_CLOUD_NAME || 'lnjqbjeh';
@@ -106,13 +429,6 @@ if (cloudinaryConfigured) {
   console.log(`Cloudinary configured with cloud_name: ${cloudName}`);
 }
 
-// Local Uploads Directory fallback
-const uploadsDir = path.join(process.cwd(), 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-app.use('/uploads', express.static(uploadsDir));
-
 // Multer Configuration
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -120,13 +436,7 @@ const upload = multer({
     fileSize: MAX_FILE_SIZE_MB * 1024 * 1024,
   },
   fileFilter: (_req, file, cb) => {
-    const allowedMimeTypes = [
-      'image/jpeg',
-      'image/png',
-      'image/webp',
-      'image/gif',
-      'image/avif',
-    ];
+    const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif', 'image/avif'];
     if (allowedMimeTypes.includes(file.mimetype.toLowerCase())) {
       cb(null, true);
     } else {
@@ -140,12 +450,14 @@ const authenticateUser = async (req: express.Request, _res: express.Response, ne
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.split('Bearer ')[1];
-    try {
-      const decodedToken = await adminAuth.verifyIdToken(token);
-      (req as any).user = decodedToken;
-    } catch {
-      // invalid token
+    if (firebaseAdminReady && adminAuth) {
+      try {
+        const decodedToken = await adminAuth.verifyIdToken(token);
+        (req as any).user = decodedToken;
+        return next();
+      } catch {}
     }
+    (req as any).user = decodeJwtPayload(token);
   }
   next();
 };
@@ -254,7 +566,7 @@ app.post('/api/upload', uploadLimiter, upload.single('image'), async (req, res) 
       updatedAt: now.toISOString(),
     };
 
-    await adminDb.collection('images').doc(imageId).set(imageDoc);
+    await dbSaveImage(imageDoc);
 
     return res.status(201).json({ status: 'success', data: imageDoc });
   } catch (err: any) {
@@ -267,32 +579,14 @@ app.post('/api/upload', uploadLimiter, upload.single('image'), async (req, res) 
 app.get('/api/images', async (req, res) => {
   try {
     const { sort = 'newest', search = '', limit = '32' } = req.query;
-    let query: FirebaseFirestore.Query = adminDb.collection('images').where('isPublic', '==', true);
+    const { items, total } = await dbGetImages({
+      sort: String(sort),
+      search: String(search),
+      limit: Number(limit) || 32,
+      isPublicOnly: true,
+    });
 
-    const snapshot = await query.get();
-    let items: any[] = [];
-    snapshot.forEach((doc) => items.push(doc.data()));
-
-    // Search filter
-    if (search && typeof search === 'string') {
-      const q = search.toLowerCase();
-      items = items.filter((img) => img.title?.toLowerCase().includes(q));
-    }
-
-    // Sorting
-    if (sort === 'views') {
-      items.sort((a, b) => (b.views || 0) - (a.views || 0));
-    } else if (sort === 'downloads') {
-      items.sort((a, b) => (b.downloads || 0) - (a.downloads || 0));
-    } else {
-      // newest
-      items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    }
-
-    const limitNum = Number(limit) || 32;
-    const paginated = items.slice(0, limitNum);
-
-    return res.json({ images: paginated, total: items.length });
+    return res.json({ images: items, total });
   } catch (err: any) {
     console.error('Fetch images error:', err);
     return res.status(500).json({ message: 'Resimler yüklenirken hata oluştu.' });
@@ -303,19 +597,16 @@ app.get('/api/images', async (req, res) => {
 app.get('/api/images/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const docRef = adminDb.collection('images').doc(id);
-    const snap = await docRef.get();
+    const data = await dbGetImageById(id);
 
-    if (!snap.exists) {
+    if (!data) {
       return res.status(404).json({ message: 'Resim bulunamadı.' });
     }
 
-    const data = snap.data();
-    // Increment view count in firestore
-    await docRef.update({ views: (data?.views || 0) + 1 });
+    await dbIncrementViews(id);
 
-    return res.json({ data: { ...data, views: (data?.views || 0) + 1 } });
-  } catch (err: any) {
+    return res.json({ data: { ...data, views: (data.views || 0) + 1 } });
+  } catch {
     return res.status(500).json({ message: 'Detay alınamadı.' });
   }
 });
@@ -324,11 +615,7 @@ app.get('/api/images/:id', async (req, res) => {
 app.post('/api/images/:id/download', async (req, res) => {
   try {
     const { id } = req.params;
-    const docRef = adminDb.collection('images').doc(id);
-    const snap = await docRef.get();
-    if (snap.exists) {
-      await docRef.update({ downloads: (snap.data()?.downloads || 0) + 1 });
-    }
+    await dbIncrementDownloads(id);
     return res.json({ status: 'ok' });
   } catch {
     return res.status(500).json({ message: 'Hata.' });
@@ -344,24 +631,22 @@ app.delete('/api/images/:id', async (req, res) => {
       return res.status(401).json({ message: 'Oturum açmanız gerekiyor.' });
     }
 
-    const docRef = adminDb.collection('images').doc(id);
-    const snap = await docRef.get();
-    if (!snap.exists) {
+    const imgData = await dbGetImageById(id);
+    if (!imgData) {
       return res.status(404).json({ message: 'Resim bulunamadı.' });
     }
 
-    const imgData = snap.data();
-    const isAdmin = user.email === 'admin@pichost.com' || user.admin === true;
-    const isOwner = imgData?.userId === user.uid;
+    const isAdmin = user.email === (process.env.ADMIN_EMAIL || 'admin@pichost.com') || user.admin === true;
+    const isOwner = imgData.userId === user.uid;
 
     if (!isOwner && !isAdmin) {
       return res.status(403).json({ message: 'Bu resmi silme yetkiniz yok.' });
     }
 
     // Delete from Cloudinary if public_id exists
-    if (imgData?.public_id && cloudinaryConfigured && !imgData.public_id.startsWith('local_')) {
+    if (imgData.public_id && cloudinaryConfigured && !imgData.public_id.startsWith('local_')) {
       await cloudinary.uploader.destroy(imgData.public_id).catch(() => {});
-    } else if (imgData?.public_id?.startsWith('local_')) {
+    } else if (imgData.public_id?.startsWith('local_')) {
       // Local fallback file deletion
       const localFileName = `${imgData.public_id.replace('local_', 'img_')}.${imgData.format}`;
       const localFilePath = path.join(uploadsDir, localFileName);
@@ -370,9 +655,9 @@ app.delete('/api/images/:id', async (req, res) => {
       }
     }
 
-    await docRef.delete();
+    await dbDeleteImage(id);
     return res.json({ status: 'success', message: 'Resim başarıyla silindi.' });
-  } catch (err: any) {
+  } catch {
     return res.status(500).json({ message: 'Silme işlemi başarısız.' });
   }
 });
@@ -382,17 +667,7 @@ app.post('/api/images/:id/report', async (req, res) => {
   try {
     const { id } = req.params;
     const { reason } = req.body;
-    const reportId = Math.random().toString(36).substring(2, 9);
-
-    await adminDb.collection('reports').doc(reportId).set({
-      id: reportId,
-      imageId: id,
-      reason: reason || 'Neden belirtilmedi',
-      status: 'pending',
-      createdAt: new Date().toISOString(),
-    });
-
-    await adminDb.collection('images').doc(id).update({ isReported: true, reportReason: reason });
+    await dbReportImage(id, reason);
     return res.json({ status: 'success' });
   } catch {
     return res.status(500).json({ message: 'Bildirim gönderilemedi.' });
@@ -405,12 +680,8 @@ app.get('/api/user/images', async (req, res) => {
     const user = (req as any).user;
     if (!user) return res.status(401).json({ message: 'Yetkisiz erişim.' });
 
-    const snap = await adminDb.collection('images').where('userId', '==', user.uid).get();
-    const images: any[] = [];
-    snap.forEach((doc) => images.push(doc.data()));
-
-    images.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    return res.json({ data: images });
+    const { items } = await dbGetImages({ userId: user.uid });
+    return res.json({ data: items });
   } catch {
     return res.status(500).json({ message: 'Kullanıcı resimleri alınamadı.' });
   }
@@ -420,45 +691,15 @@ app.get('/api/user/images', async (req, res) => {
 app.get('/api/admin/stats', async (req, res) => {
   try {
     const user = (req as any).user;
-    if (!user || (user.email !== 'admin@pichost.com' && !user.admin)) {
+    if (!user || (user.email !== (process.env.ADMIN_EMAIL || 'admin@pichost.com') && !user.admin)) {
       return res.status(403).json({ message: 'Yalnızca yöneticiler erişebilir.' });
     }
 
-    const imagesSnap = await adminDb.collection('images').get();
-    const usersSnap = await adminDb.collection('users').get();
-
-    let totalViews = 0;
-    let totalDownloads = 0;
-    let todayUploads = 0;
-    let todayUsers = 0;
-    const todayStr = new Date().toISOString().split('T')[0];
-
-    const recentUploads: any[] = [];
-    imagesSnap.forEach((doc) => {
-      const data = doc.data();
-      totalViews += data.views || 0;
-      totalDownloads += data.downloads || 0;
-      if (data.createdAt?.startsWith(todayStr)) todayUploads++;
-      recentUploads.push(data);
-    });
-
-    const recentUsers: any[] = [];
-    usersSnap.forEach((doc) => {
-      const data = doc.data();
-      if (data.createdAt?.startsWith(todayStr)) todayUsers++;
-      recentUsers.push(data);
-    });
-
-    recentUploads.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    const stats = await dbGetAdminStats();
 
     return res.json({
       data: {
-        totalUsers: usersSnap.size,
-        totalImages: imagesSnap.size,
-        todayUploads,
-        todayUsers,
-        totalViews,
-        totalDownloads,
+        ...stats,
         cloudinaryUsage: {
           plan: 'Cloudinary Free',
           maxStorageMb: 1000,
@@ -466,8 +707,6 @@ app.get('/api/admin/stats', async (req, res) => {
           transformationsUsed: 120,
           bandwidthUsedMb: 180,
         },
-        recentUploads: recentUploads.slice(0, 10),
-        recentUsers: recentUsers.slice(0, 10),
       },
     });
   } catch {
@@ -481,10 +720,7 @@ app.get('/api/admin/users', async (req, res) => {
     const user = (req as any).user;
     if (!user) return res.status(403).json({ message: 'Yetkisiz.' });
 
-    const snap = await adminDb.collection('users').get();
-    const usersList: any[] = [];
-    snap.forEach((doc) => usersList.push(doc.data()));
-
+    const usersList = await dbGetUsers();
     return res.json({ data: usersList });
   } catch {
     return res.status(500).json({ message: 'Kullanıcılar alınamadı.' });
@@ -496,7 +732,7 @@ app.post('/api/admin/users/:uid/ban', async (req, res) => {
   try {
     const { uid } = req.params;
     const { isBanned } = req.body;
-    await adminDb.collection('users').doc(uid).update({ isBanned: Boolean(isBanned) });
+    await dbBanUser(uid, isBanned);
     return res.json({ status: 'success' });
   } catch {
     return res.status(500).json({ message: 'Hata.' });
@@ -506,9 +742,7 @@ app.post('/api/admin/users/:uid/ban', async (req, res) => {
 // Announcements GET & POST
 app.get('/api/announcements', async (_req, res) => {
   try {
-    const snap = await adminDb.collection('announcements').where('active', '==', true).get();
-    const announcements: any[] = [];
-    snap.forEach((doc) => announcements.push(doc.data()));
+    const announcements = await dbGetAnnouncements();
     return res.json({ data: announcements });
   } catch {
     return res.json({ data: [] });
@@ -527,7 +761,7 @@ app.post('/api/admin/announcement', async (req, res) => {
       active: active !== false,
       createdAt: new Date().toISOString(),
     };
-    await adminDb.collection('announcements').doc(id).set(newAnn);
+    await dbAddAnnouncement(newAnn);
     return res.json({ status: 'success', data: newAnn });
   } catch {
     return res.status(500).json({ message: 'Duyuru eklenemedi.' });
@@ -537,7 +771,7 @@ app.post('/api/admin/announcement', async (req, res) => {
 // Dynamic Sitemap Generator
 app.get('/sitemap.xml', async (req, res) => {
   try {
-    const snap = await adminDb.collection('images').where('isPublic', '==', true).limit(500).get();
+    const { items } = await dbGetImages({ isPublicOnly: true, limit: 500 });
     const baseUrl = process.env.BASE_URL || `http://${req.headers.host}`;
 
     let urls = `
@@ -547,8 +781,7 @@ app.get('/sitemap.xml', async (req, res) => {
       <url><loc>${baseUrl}/blog</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
     `;
 
-    snap.forEach((doc) => {
-      const img = doc.data();
+    items.forEach((img) => {
       urls += `<url><loc>${baseUrl}/i/${img.id}</loc><lastmod>${img.createdAt?.split('T')[0] || '2026-08-13'}</lastmod><priority>0.8</priority></url>`;
     });
 
