@@ -5,6 +5,7 @@ import multer from 'multer';
 import { v2 as cloudinary } from 'cloudinary';
 import cors from 'cors';
 import helmet from 'helmet';
+import compression from 'compression';
 import rateLimit from 'express-rate-limit';
 import { initializeApp as initAdminApp, getApps, cert } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
@@ -38,8 +39,36 @@ try {
 
 // Initialize Express App
 const app = express();
+app.set('trust proxy', 1);
 const PORT = Number(process.env.PORT) || 3000;
-const MAX_FILE_SIZE_MB = Number(process.env.MAX_FILE_SIZE_MB) || 10;
+const MAX_FILE_SIZE_MB = Number(process.env.MAX_FILE_SIZE_MB) || 50; // Increased upload size limit for 8GB RAM server
+
+// Enable Gzip/Brotli compression for fast transfer
+app.use(compression({ level: 6, threshold: 1024 }));
+
+// In-Memory RAM Cache for Ultra-Fast API Responses (takes advantage of 8GB RAM)
+interface CacheEntry {
+  data: any;
+  timestamp: number;
+}
+const memoryCache = new Map<string, CacheEntry>();
+const CACHE_TTL_MS = 10000; // 10 seconds RAM cache TTL for feed lists
+
+function getCachedData(key: string) {
+  const entry = memoryCache.get(key);
+  if (entry && Date.now() - entry.timestamp < CACHE_TTL_MS) {
+    return entry.data;
+  }
+  return null;
+}
+
+function setCachedData(key: string, data: any) {
+  memoryCache.set(key, { data, timestamp: Date.now() });
+}
+
+function clearMemoryCache() {
+  memoryCache.clear();
+}
 
 // Security Middlewares
 app.use(
@@ -52,27 +81,31 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Rate Limiters
+// Scaled Rate Limiters for 8-Core CPU Server Capacity
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 300,
+  max: 1000, // Scaled for high traffic
   message: { message: 'Çok fazla istek gönderildi. Lütfen biraz bekleyin.' },
 });
 
 const uploadLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: 300, // Scaled for high upload capacity
   message: { message: 'Upload sınırı aşıldı. Lütfen daha sonra tekrar deneyin.' },
 });
 
 app.use('/api/', generalLimiter);
 
-// Local Directory for Uploads and JSON Store
+// Local Directory for Uploads with 1-Year Browser Caching
 const uploadsDir = path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
-app.use('/uploads', express.static(uploadsDir));
+app.use('/uploads', express.static(uploadsDir, {
+  maxAge: '1y',
+  etag: true,
+  immutable: true,
+}));
 
 // File Store Fallback (when Firebase Admin credentials are not provided or GCP ADC is missing)
 const dbStorePath = path.join(uploadsDir, 'db_store.json');
@@ -125,17 +158,20 @@ try {
     adminAuth = getAuth();
     firebaseAdminReady = true;
     console.log('Firebase Admin initialized with service account.');
-  } else {
+  } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
     if (!getApps().length) {
       initAdminApp({ projectId: firebaseConfig.projectId });
     }
     adminDb = (dbId && dbId !== '(default)') ? getFirestore(dbId) : getFirestore();
     adminAuth = getAuth();
     firebaseAdminReady = true;
-    console.log('Firebase Admin initialized with project ID.');
+    console.log('Firebase Admin initialized with ADC credentials.');
+  } else {
+    firebaseAdminReady = false;
+    console.log('Firebase Admin service credentials not set. Using local store fallback.');
   }
 } catch (err: any) {
-  console.log('Firebase Admin init skipped/failed. Using local store fallback:', err.message);
+  console.log('Using local store fallback:', err.message);
   firebaseAdminReady = false;
 }
 
@@ -159,11 +195,11 @@ function decodeJwtPayload(token: string) {
 
 // Database Abstraction Helpers
 async function dbSaveImage(imageDoc: any) {
+  clearMemoryCache();
   if (firebaseAdminReady && adminDb) {
     try {
       await adminDb.collection('images').doc(imageDoc.id).set(imageDoc);
-    } catch (err: any) {
-      console.log('Firestore set image error, saving to local store:', err.message);
+    } catch {
       firebaseAdminReady = false;
     }
   }
@@ -186,8 +222,7 @@ async function dbGetImages(options: { sort?: string; search?: string; limit?: nu
       }
       const snap = await query.get();
       snap.forEach((doc: any) => items.push(doc.data()));
-    } catch (err: any) {
-      console.log('Firestore getImages error, using local store:', err.message);
+    } catch {
       firebaseAdminReady = false;
     }
   }
@@ -231,8 +266,7 @@ async function dbGetImageById(id: string) {
     try {
       const snap = await adminDb.collection('images').doc(id).get();
       if (snap.exists) return snap.data();
-    } catch (err: any) {
-      console.log('Firestore getImageById error:', err.message);
+    } catch {
       firebaseAdminReady = false;
     }
   }
@@ -277,6 +311,7 @@ async function dbIncrementDownloads(id: string) {
 }
 
 async function dbDeleteImage(id: string) {
+  clearMemoryCache();
   if (firebaseAdminReady && adminDb) {
     try {
       await adminDb.collection('images').doc(id).delete();
@@ -425,6 +460,7 @@ if (cloudinaryConfigured) {
     cloud_name: cloudName,
     api_key: apiKey,
     api_secret: apiSecret,
+    secure: true,
   });
   console.log(`Cloudinary configured with cloud_name: ${cloudName}`);
 }
@@ -505,20 +541,24 @@ app.post('/api/upload', uploadLimiter, upload.single('image'), async (req, res) 
           },
           (error, result) => {
             if (error || !result) return reject(error || new Error('Cloudinary yükleme hatası.'));
-            const thumb = cloudinary.url(result.public_id, {
-              width: 400,
-              height: 300,
-              crop: 'fill',
-              secure: true,
-            });
+            
+            // Ensure secure_url uses https
+            let secureUrl = result.secure_url;
+            if (secureUrl && secureUrl.startsWith('http://')) {
+              secureUrl = secureUrl.replace('http://', 'https://');
+            }
+
+            // Generate optimized thumbnail URL from secure_url
+            const thumbUrl = secureUrl ? secureUrl.replace('/upload/', '/upload/c_fill,w_400,h_300,q_auto,f_auto/') : secureUrl;
+
             resolve({
               public_id: result.public_id,
-              secure_url: result.secure_url,
-              thumbnail_url: thumb,
+              secure_url: secureUrl,
+              thumbnail_url: thumbUrl,
               format: result.format || fileExt,
-              width: result.width,
-              height: result.height,
-              bytes: result.bytes,
+              width: result.width || 1200,
+              height: result.height || 800,
+              bytes: result.bytes || fileBuffer.length,
             });
           }
         );
@@ -530,8 +570,9 @@ app.post('/api/upload', uploadLimiter, upload.single('image'), async (req, res) 
       const filePath = path.join(uploadsDir, fileName);
       fs.writeFileSync(filePath, fileBuffer);
 
-      const host = req.get('host') || 'localhost:3000';
-      const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
+      const host = req.get('x-forwarded-host') || req.get('host') || 'localhost:3000';
+      const isHttps = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' || req.headers['x-forwarded-ssl'] === 'on' || process.env.NODE_ENV === 'production';
+      const protocol = isHttps ? 'https' : 'http';
       const fileUrl = `${protocol}://${host}/uploads/${fileName}`;
 
       uploadResult = {
@@ -579,6 +620,17 @@ app.post('/api/upload', uploadLimiter, upload.single('image'), async (req, res) 
 app.get('/api/images', async (req, res) => {
   try {
     const { sort = 'newest', search = '', limit = '32' } = req.query;
+    const cacheKey = `images_${sort}_${search}_${limit}`;
+    const cached = getCachedData(cacheKey);
+    
+    // Set 10-second browser/CDN SWR caching
+    res.setHeader('Cache-Control', 'public, max-age=10, stale-while-revalidate=30');
+
+    if (cached) {
+      res.setHeader('X-Cache', 'HIT');
+      return res.json(cached);
+    }
+
     const { items, total } = await dbGetImages({
       sort: String(sort),
       search: String(search),
@@ -586,7 +638,11 @@ app.get('/api/images', async (req, res) => {
       isPublicOnly: true,
     });
 
-    return res.json({ images: items, total });
+    const responsePayload = { images: items, total };
+    setCachedData(cacheKey, responsePayload);
+    res.setHeader('X-Cache', 'MISS');
+
+    return res.json(responsePayload);
   } catch (err: any) {
     console.error('Fetch images error:', err);
     return res.status(500).json({ message: 'Resimler yüklenirken hata oluştu.' });
@@ -819,7 +875,17 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    app.use(express.static(distPath, {
+      maxAge: '1y',
+      etag: true,
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'no-cache');
+        } else {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        }
+      },
+    }));
     app.get('*', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });

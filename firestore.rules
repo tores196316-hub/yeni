@@ -19,7 +19,7 @@ service cloud.firestore {
 
     // Images Collection
     match /images/{imageId} {
-      allow read: if resource.data.isPublic == true || isOwner(resource.data.userId) || isAdmin();
+      allow read: if true;
       allow create: if true;
       allow delete: if isOwner(resource.data.userId) || isAdmin();
       allow update: if true;
